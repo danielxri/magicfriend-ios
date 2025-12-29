@@ -4,7 +4,7 @@ struct ContentView: View {
     var body: some View {
         TabView {
             // Tab 1: Camera (Vision)
-            Text("Camera View Placeholder")
+            CameraView()
                 .tabItem {
                     Label("Create", systemImage: "sparkles")
                 }
