@@ -3,38 +3,86 @@ import AVFoundation
 
 struct CameraView: View {
     @StateObject private var camera = CameraModel()
-    
+    @State private var generationResponse: GenerationResponse?
+    @State private var originalImage: UIImage?
+    @State private var isUploading = false
+    @State private var navigateToResult = false
+    @State private var errorMessage: String?
+    @State private var showError = false
+
     var body: some View {
-        ZStack {
-            // Camera Preview
-            CameraPreview(camera: camera)
-                .ignoresSafeArea()
-            
-            // Overlay Controls
-            VStack {
-                Spacer()
+        NavigationStack {
+            ZStack {
+                // Camera Preview
+                CameraPreview(camera: camera)
+                    .ignoresSafeArea()
                 
-                Button(action: {
-                    camera.takePhoto()
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 70, height: 70)
+                // Overlay Controls
+                if isUploading {
+                    Color.black.opacity(0.6).ignoresSafeArea()
+                    VStack {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                            .tint(.white)
+                        Text("Making Magic...")
+                            .foregroundColor(.white)
+                            .font(.headline)
+                    }
+                } else {
+                    VStack {
+                        Spacer()
                         
-                        Circle()
-                            .stroke(Color.white, lineWidth: 2)
-                            .frame(width: 80, height: 80)
+                        Button(action: {
+                            camera.takePhoto { image in
+                                self.originalImage = image
+                                uploadPhoto(image)
+                            }
+                        }) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.white)
+                                    .frame(width: 70, height: 70)
+                                
+                                Circle()
+                                    .stroke(Color.white, lineWidth: 2)
+                                    .frame(width: 80, height: 80)
+                            }
+                        }
+                        .padding(.bottom, 30)
                     }
                 }
-                .padding(.bottom, 30)
+            }
+            .navigationDestination(isPresented: $navigateToResult) {
+                if let response = generationResponse, let img = originalImage {
+                    CharacterResultView(generationResponse: response, originalImage: img)
+                }
+            }
+            .alert(isPresented: $showError) {
+                Alert(title: Text("Error"), message: Text(errorMessage ?? "Unknown error"), dismissButton: .default(Text("OK")))
             }
         }
         .onAppear {
             camera.checkPermissions()
         }
-        .alert(isPresented: $camera.showPermissionAlert) {
-            Alert(title: Text("Camera Access"), message: Text("Please enable camera access in Settings to use Magic Friend."), dismissButton: .default(Text("OK")))
+    }
+    
+    func uploadPhoto(_ image: UIImage) {
+        isUploading = true
+        Task {
+            do {
+                let response = try await APIService.shared.uploadImage(image)
+                DispatchQueue.main.async {
+                    self.generationResponse = response
+                    self.isUploading = false
+                    self.navigateToResult = true
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.errorMessage = "Failed to upload: \(error.localizedDescription)"
+                    self.isUploading = false
+                    self.showError = true
+                }
+            }
         }
     }
 }
@@ -42,71 +90,57 @@ struct CameraView: View {
 // MARK: - Camera Model
 class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
     @Published var session = AVCaptureSession()
-    @Published var showPermissionAlert = false
+    @Published var displayPreview = true // Toggle to free resources?
     @Published var previewLayer: AVCaptureVideoPreviewLayer?
+    
+    // Callback for photo
+    var photoCallback: ((UIImage) -> Void)?
     
     private let output = AVCapturePhotoOutput()
     
     func checkPermissions() {
+        // ... (Existing Permission Logic) ...
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             setupCamera()
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { granted in
-                if granted {
-                    DispatchQueue.main.async { self.setupCamera() }
-                }
+                if granted { DispatchQueue.main.async { self.setupCamera() } }
             }
-        case .denied, .restricted:
-            DispatchQueue.main.async { self.showPermissionAlert = true }
-        @unknown default:
-            break
+        default: break
         }
     }
     
     func setupCamera() {
+        guard !session.isRunning else { return }
         do {
             session.beginConfiguration()
-            
             guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else { return }
             let input = try AVCaptureDeviceInput(device: device)
-            
-            if session.canAddInput(input) {
-                session.addInput(input)
-            }
-            
-            if session.canAddOutput(output) {
-                session.addOutput(output)
-            }
-            
+            if session.canAddInput(input) { session.addInput(input) }
+            if session.canAddOutput(output) { session.addOutput(output) }
             session.commitConfiguration()
             
-            DispatchQueue.global(qos: .background).async {
+            DispatchQueue.global(qos: .userInitiated).async {
                 self.session.startRunning()
             }
-        } catch {
-            print(error.localizedDescription)
-        }
+        } catch { print(error) }
     }
     
-    func takePhoto() {
-        // Simple capture
+    func takePhoto(completion: @escaping (UIImage) -> Void) {
+        self.photoCallback = completion
         let settings = AVCapturePhotoSettings()
         output.capturePhoto(with: settings, delegate: self)
     }
     
-    // Delegate method for photo capture
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        if let error = error {
-            print("Error capturing photo: \(error)")
-            return
+        if let data = photo.fileDataRepresentation(), let image = UIImage(data: data) {
+            // Fix Orientation potentially needed, but start simple
+            photoCallback?(image)
         }
-        
-        guard let imageData = photo.fileDataRepresentation() else { return }
-        print("Photo captured! Size: \(imageData.count)")
-        // TODO: Send to API
     }
 }
+
 
 // MARK: - Preview View (UIKit Wrapper)
 struct CameraPreview: UIViewRepresentable {
