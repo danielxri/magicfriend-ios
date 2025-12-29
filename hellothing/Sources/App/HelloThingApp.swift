@@ -2,9 +2,9 @@ import SwiftUI
 // import RevenueCat // Uncomment when pod installed
 
 @main
-struct MagicFriendApp: App {
+struct HelloThingApp: App {
     init() {
-        print("MagicFriend iOS Initializing...")
+        print("HelloThing iOS Initializing...")
         // Purchases.configure(withAPIKey: "appl_YOUR_PUBLIC_SDK_KEY")
     }
 
